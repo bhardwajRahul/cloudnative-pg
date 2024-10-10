@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cloudnative-pg/machinery/pkg/log"
+	pgTime "github.com/cloudnative-pg/machinery/pkg/postgres/time"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
@@ -34,7 +35,6 @@ import (
 	"github.com/cloudnative-pg/cloudnative-pg/pkg/conditions"
 	"github.com/cloudnative-pg/cloudnative-pg/pkg/management/postgres"
 	"github.com/cloudnative-pg/cloudnative-pg/pkg/resources"
-	"github.com/cloudnative-pg/cloudnative-pg/pkg/utils"
 )
 
 // PluginBackupCommand represent a backup command that is being executed
@@ -54,6 +54,16 @@ func NewPluginBackupCommand(
 	recorder record.EventRecorder,
 ) *PluginBackupCommand {
 	backup.EnsureGVKIsPresent()
+
+	logger := log.WithValues(
+		"pluginConfiguration", backup.Spec.PluginConfiguration,
+		"backupName", backup.Name,
+		"backupNamespace", backup.Name)
+
+	plugins := repository.New()
+	if _, err := plugins.RegisterUnixSocketPluginsInPath(configuration.Current.PluginSocketDir); err != nil {
+		logger.Error(err, "Error while discovering plugins")
+	}
 
 	return &PluginBackupCommand{
 		Cluster:  cluster,
@@ -75,7 +85,7 @@ func (b *PluginBackupCommand) invokeStart(ctx context.Context) {
 		"backupNamespace", b.Backup.Name)
 
 	plugins := repository.New()
-	if err := plugins.RegisterUnixSocketPluginsInPath(configuration.Current.PluginSocketDir); err != nil {
+	if _, err := plugins.RegisterUnixSocketPluginsInPath(configuration.Current.PluginSocketDir); err != nil {
 		contextLogger.Error(err, "Error while discovering plugins")
 	}
 	defer plugins.Close()
@@ -169,7 +179,7 @@ func (b *PluginBackupCommand) markBackupAsFailed(ctx context.Context, failure er
 
 		meta.SetStatusCondition(&b.Cluster.Status.Conditions, *apiv1.BuildClusterBackupFailedCondition(failure))
 
-		b.Cluster.Status.LastFailedBackup = utils.GetCurrentTimestampWithFormat(time.RFC3339)
+		b.Cluster.Status.LastFailedBackup = pgTime.GetCurrentTimestampWithFormat(time.RFC3339)
 		return b.Client.Status().Patch(ctx, b.Cluster, client.MergeFrom(origCluster))
 	}); failErr != nil {
 		contextLogger.Error(failErr, "while setting cluster condition for failed backup")
